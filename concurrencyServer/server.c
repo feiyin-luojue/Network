@@ -8,12 +8,17 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <pthread.h>
+#include "threadPool.h"
 
 
 #define SERVER_PORT 8080
 #define MAX_LISTEN  128
 #define LOCAL_IPADDRESS "192.168.241.132"
 #define BUFFER_SIZE 128
+#define MINTHREADS 5
+#define MAXTHREADS 10
+#define MAXQUEUESIZE 50
 
 void sigHander()
 {
@@ -21,9 +26,65 @@ void sigHander()
     exit(0);
 }
 
+/* 线程处理函数 */
+void * threadHandle(void *arg)
+{
+    /* 设置线程分离 */
+    pthread_detach(pthread_self());
+    /* 通信句柄 */
+    int acceptfd = *(int *)arg;
+
+    /* 通信 */  
+
+    /* 接收缓冲区 */   
+    char recvbuffer[BUFFER_SIZE];
+    memset(&recvbuffer, 0, sizeof(recvbuffer));
+
+    /* 发送缓冲区 */ 
+    char sendBuffer[BUFFER_SIZE];
+    memset(&sendBuffer, 0, sizeof(sendBuffer));
+
+    /* 读取到的字节数 */
+    int readBytes = 0;
+    while (1)
+    {
+        readBytes = read(acceptfd, recvbuffer, sizeof(recvbuffer) - 1);
+        if (readBytes <= 0)
+        {
+            printf("有个客户端下线了\n");
+            close(acceptfd);
+            break;
+        }
+        else
+        {
+            /* 读到的字符串 */
+            printf("客户端对服务器说:%s\n",recvbuffer);
+            if (strncmp(recvbuffer, "我是客户端1", strlen("我是客户端1")) == 0)
+            {
+                strncpy(sendBuffer, "你是客户端1", sizeof(sendBuffer) - 1);
+                sleep(1);
+                write(acceptfd, sendBuffer, sizeof(sendBuffer));
+            }
+            else if (strncmp(recvbuffer, "我是客户端2", strlen("我是客户端2")) == 0)
+            {
+                strncpy(sendBuffer, "你是客户端2", sizeof(sendBuffer) - 1);
+                sleep(1);
+                write(acceptfd, sendBuffer, sizeof(sendBuffer));
+            }
+        }
+    }
+
+    pthread_exit(NULL);
+}
+
 
 int main(int argc, char const *argv[])
 {
+    /* 初始化线程池 */
+    // threadPool_t pool;
+    // threadPoolInit(&pool, MINTHREADS, MAXTHREADS, MAXQUEUESIZE);
+
+
     /* 信号注册 */
     signal(SIGINT, (__sighandler_t)sigHander);
     signal(SIGQUIT, (__sighandler_t)sigHander);
@@ -87,51 +148,37 @@ int main(int argc, char const *argv[])
     struct sockaddr_in clientAddress;
     memset(&clientAddress, 0, sizeof(clientAddress));
 
-    socklen_t clientAddressLen = 0;
-
-    int acceptfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientAddressLen);
-    if (acceptfd == -1)
-    {
-        perror("accept error");
-        exit(-1);
-    }
-
-    char buffer[BUFFER_SIZE];
-    memset(&buffer, 0, sizeof(buffer));
-
-    char replayBuffer[BUFFER_SIZE];
-    memset(&replayBuffer, 0, sizeof(replayBuffer));
-
-    int readBytes = 0;
+    /* 循环去接收客户端的请求 */
     while (1)
     {
-        readBytes = read(acceptfd, buffer, sizeof(buffer) - 1);
-        if (readBytes <= 0)
-        {
-            perror("read error");
-            printf("读了个寂寞，直接G\n");
-            close(acceptfd);
-            break;
-        }
-        else if (readBytes == 0)
-        {
-            /* 资源问题 */
-            printf("小黑子下线了，我直接溜溜\n");
-            break;
-        }
-        else
-        {
-            /* 读到的字符串 */
-            printf("客户端对服务器说:%s\n",buffer);
-            sleep(3);
-            
-            strncpy(replayBuffer, "？？？小黑子？", sizeof(buffer) - 1);
+        socklen_t clientAddressLen = 0;
 
-            write(acceptfd, replayBuffer, sizeof(buffer) - 1);
+        int acceptfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientAddressLen);
+        if (acceptfd == -1)
+        {
+            perror("accept error");
+            exit(-1);
         }
+
+#if 1
+        /* 这种情况每来一个客户端就开辟线程资源， */
+        /* 开一个线程去服务acceptfd */
+        pthread_t tid;
+        ret = pthread_create(&tid, NULL, threadHandle, (void *)&acceptfd);
+        if (ret != 0 )
+        {
+            perror("thread create error");
+            exit(-1);
+        }
+#else
+        /* 将任务添加到任务队列 */
+        threadPoolAddTask(&pool, threadHandle, (void *)&acceptfd);
+#endif
     }
 
-    close(acceptfd);
+    /* 释放线程池 */
+    // threadPoolDestory(&pool);
+
     close(sockfd);
 
     return 0;
